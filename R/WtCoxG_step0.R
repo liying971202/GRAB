@@ -1,42 +1,246 @@
 #' Quality control to check batch effect between study cohort and reference population.
 #'
-#' Quality control to check batch effect between study cohort and reference population.
-#' 
-#' @param GenoFile a character of genotype file. See Details section for more details.
-#' @param GenoFileIndex additional index file(s) corresponding to GenoFile. See Details section for more details.
-#' @param PhenoData a dataframe. must have at least two columns \code{SampleID} and \code{Indicator}, \code{SampleID} hold the personal identifiers for all individuals, and \code{Indicator} hold wether the event occurred, and the value must be 0 or 1 or NA 
-#' @param RefAFfile a character of reference file. The reference file must be a \code{txt} file (header are required) including at least 7 columns \code{CHROM}, \code{POS}, \code{ID}, \code{REF}, \code{ALT}, \code{AF_ref}, \code{AN_ref}  
-#' @param RefPrev a numeric of the event rate in the population
-#' @param SNPnum a int. The least number of markers. The default is 1e4
-#' @param control a list of parameters to decide which markers to extract.See \code{Details} section for more details
-#' @return an R object with a class of "QCforBatchEffect".
+#' This function performs quality control to check the batch effect between a study cohort and a reference population.
+#'
+#' @param GenoFile A character string of the genotype file. See Details section for more details.
+#' @param GenoFileIndex Additional index file(s) corresponding to GenoFile. See Details section for more details.
+#' @param PhenoData A dataframe that must have at least two columns: \code{SampleID} holds the personal identifiers for all individuals, and \code{Indicator} holds whether the event occurred (0 or 1 or NA).
+#' @param RefAFfile A character string of the reference file. The reference file must be a \code{txt} file (header required) including at least 7 columns: \code{CHROM}, \code{POS}, \code{ID}, \code{REF}, \code{ALT}, \code{AF_ref}, \code{AN_ref}.
+#' @param RefPrev A numeric value of the event rate in the population.
+#' @param SNPnum An integer specifying the minimum number of markers. The default is 1e4.
+#' @param control A list of parameters to decide which markers to extract. See \code{Details} section for more details.
+#' @param GRM A matrix of genetic relatedness. Default is NULL.
+#' @return An R object with a class of "QCforBatchEffect".
 #' \itemize{
-#'   \item{mergeGenoInfo}: a dataframe of marker info and reference MAF
-#'   \item{cutoff}: a numeric, the cut off of batcheffect.
-#'   \item{count}: a dataframe of the frequency of the batch effect pvalue.
-#'   \item{PhenoData}: a dataframe of the input PhenoData.
-#'   \item{control}: a list of parameters to decide which markers to extract.
+#'   \item{mergeGenoInfo}: A dataframe of marker info and reference MAF.
+#'   \item{cutoff}: A numeric, the cut-off of batch effect.
+#'   \item{count}: A dataframe of the frequency of the batch effect p-value.
+#'   \item{PhenoData}: A dataframe of the input PhenoData.
+#'   \item{control}: A list of parameters to decide which markers to extract.
 #' }
-#' @details
-#' ## The following details are about argument \code{control}
-#' \describe{
-#' Argument \code{control} is used to include and exclude markers. The function supports two include files of (\code{IDsToIncludeFile}, \code{RangesToIncludeFile}) and two exclude files of (\code{IDsToExcludeFile}, \code{RangesToExcludeFile}), but does not support both include and exclude files at the same time. 
-#'   \itemize{
-#'     \item \code{AlleleOrder}: a character, \code{"ref-first"} or \code{"alt-first"}, to determine whether the REF/major allele should appear first or second. 
-#'     \item \code{AllMarkers}:  a logical value (default: \code{FALSE}) to indicate if all markers are extracted. It might take too much memory to put genotype of all markers in R. 
-#'     \item \code{IDsToIncludeFile}: a file of marker IDs to include, one column (no header). Check \code{system.file("extdata", "IDsToInclude.txt", package = "GRAB")} for an example.
-#'     \item \code{IDsToExcludeFile}: a file of marker IDs to exclude, one column (no header).
-#'     \item \code{RangesToIncludeFile}: a file of ranges to include, three columns (no headers): chromosome, start position, end position. Check \code{system.file("extdata", "RangesToInclude.txt", package = "GRAB")} for an example.
-#'     \item \code{RangesToExcludeFile}: a file of ranges to exclude, three columns (no headers): chromosome, start position, end position.
-#'   }
-#' }
-#' 
 #' 
 #' @export
 #' @import dplyr, data.table
-#' @examples
-#' Check ?GRAB.WtSPAG for examples
 #' 
+#' @examples
+#' setwd(system.file("WtSPAG", package = "GRAB"))
+#' PhenoData = read.table(system.file("WtSPAG", "simuPHENO_WtSPAG.txt", package = "GRAB"), header = T)
+#' RefPrevalence = 0.1
+#' 
+#' obj.WtCoxG = QCforBatchEffect(GenoFile = "simuBGEN1.bgen",
+#'                              GenoFileIndex = c("simuBGEN1.bgen.bgi",
+#'                                                 "simuBGEN1.sample"),
+#'                              OutputFile = "qcBGEN1.txt",
+#'                              control=list(AlleleOrder = "ref-first",
+#'                                           AllMarkers = T,
+#'                                           IndicatorColumn = "SurvEvent", SampleIDColumn = "IID"),
+#'                              PhenoData=PhenoData,
+#'                              RefAfFile = "RefMAFs.txt",
+#'                              RefPrevalence = RefPrevalence,
+#'                              SNPnum=1e4)
+#' names(obj.WtCoxG)
+QCforBatchEffect = function(GenoFile               # a character of file names of genotype files
+                            ,GenoFileIndex = NULL  # additional index file(s) corresponding to GenoFile
+                            ,OutputFile
+                            ,control=list(AlleleOrder = "ref-first")  
+                            ,PhenoData             # an R data frame with at least two columns, headers are required and should include c("SampleID", "Indicator"), the "Indicator" column should be 0, 1, or NA. 
+                            ,RefAfFile             # a character of file name of refInfo, which including at least 7 columns, header are required and should include c("CHROM", "POS", "ID", "REF", "ALT", "AF_ref","AN_ref")  
+                            ,RefPrevalence         # refernce population prevalence, the proportion of indicator == 1.
+                            ,SNPnum=1e4            # default least number of SNPs is 1e4
+                            ,GRM = NULL               # genotype relatedness matrix
+                            
+){
+  if(is.null(OutputFile))
+    stop("Argument of 'OutputFile' is required to store information for the follow-up analysis.")
+  
+  # check if there are c("Indicator", "SampleID") in PhenoData-------------------
+  if(!is.null(control$IndicatorColumn))
+  {
+    if(!control$IndicatorColumn %in% colnames(PhenoData))
+      stop(paste0("Cannot find a column of '",
+                  control$IndicatorColumn,
+                  "' (i.e. control$IndicatorColumn) in colnames(PhenoData)"))
+    posCol = which(colnames(PhenoData) == control$IndicatorColumn)
+    colnames(PhenoData)[posCol] = "Indicator"
+  }
+  
+  if(!is.null(control$SampleIDColumn))
+  {
+    if(!control$SampleIDColumn %in% colnames(PhenoData))
+      stop(paste0("Cannot find a column of '",
+                  control$IndicatorColumn,
+                  "' (i.e. control$SampleIDColumn) in colnames(PhenoData)"))
+    posCol = which(colnames(PhenoData) == control$SampleIDColumn)
+    colnames(PhenoData)[posCol] = "SampleID"
+  }  
+  
+  if(!"Indicator" %in% colnames(PhenoData))
+    stop("The column of 'Indicator' is required in PhenoData!")
+  
+  if(any(!unique(PhenoData$Indicator) %in% c(0,1,NA)))
+    stop("The value of Indicator should be 0,1 or NA")
+  
+  if(!"SampleID" %in% colnames(PhenoData))
+    stop("The column of 'SampleID' is required in PhenoData!")
+  
+  if(!is.null(GRM)){
+    if(nrow(GRM)!=nrow(PhenoData) | ncol(GRM)!=nrow(PhenoData)){
+      stop(paste0("The dimension of the GRM should be ",nrow(PhenoData)," × ",nrow(PhenoData)))
+    }
+  }
+  
+  #step1: quality control--------------------------------------------------------
+  #suppressPackageStartupMessages(library("GRAB",quietly = T))
+  suppressPackageStartupMessages(library("data.table",quietly = T))
+  suppressPackageStartupMessages(library("dplyr",quietly = T))
+  suppressPackageStartupMessages(library("mvtnorm",quietly = T))
+  
+  ## reference genoInfo----------------------------------------------------------
+  refGenoInfo = fread(RefAfFile)%>%as_tibble()
+  
+  # check if there are 7 columns in RefAfFile
+  for(colname in c("CHROM", "POS", "ID", "REF", "ALT", "AF_ref","AN_ref")){
+    if(!colname %in% colnames(refGenoInfo)){
+      stop( paste0(colname, " is missing in RefAfFile!") )}
+  }
+  
+  ## merge sample genoInfo and ref genoInfo--------------------------------------
+  GenoInfo.ctrl = GRAB.getGenoInfo(GenoFile = GenoFile
+                                   ,GenoFileIndex = GenoFileIndex
+                                   ,SampleIDs = with(PhenoData,SampleID[Indicator==0]) # MAF in cases
+                                   ,control = control) %>%
+    rename(mu0 = altFreq, mr0 = missingRate ) %>% 
+    select(mu0, mr0)
+  
+  if(nrow(GenoInfo.ctrl)<SNPnum)    
+    stop("The number of genetic variants < ",SNPnum)
+  
+  GenoInfo = GRAB.getGenoInfo(GenoFile = GenoFile
+                              ,GenoFileIndex = GenoFileIndex
+                              ,SampleIDs = with(PhenoData,SampleID[Indicator==1]) # MAF in controls
+                              ,control = control) %>% 
+    rename(mu1 = altFreq, mr1 = missingRate) %>% 
+    cbind(., GenoInfo.ctrl) %>% as_tibble() %>%
+    mutate(RA = ifelse(REF < ALT, paste0(REF, ALT), paste0(ALT, REF))) %>%
+    mutate(index = 1:n())
+  
+  mergeGenoInfo = refGenoInfo %>% 
+    mutate(RA = ifelse(REF < ALT, paste0(REF, ALT), paste0(ALT, REF))) %>% 
+    merge(., GenoInfo, by=c("CHROM", "POS", "RA"), all.y=T) %>% 
+    rename(REF = REF.y, ALT = ALT.y, ID = ID.y)%>% 
+    mutate(AF_ref = ifelse(REF == REF.x, AF_ref, 1-AF_ref  ))%>%
+    select(-REF.x, -ALT.x, -ID.x, -RA) %>%
+    arrange( index )%>%
+    select( -index )%>%
+    mutate( n1=sum(PhenoData$Indicator) * (1 - mr1),
+            n0=sum(1 - PhenoData$Indicator) * (1 - mr0) )
+  
+  ####fit null model-------------------------------------------------------------------
+  obj.WtSPAG = GRAB.NullModel(Surv(SurvTime, Indicator) ~ Cov1 + Cov2,
+                              data = PhenoData,
+                              subjData = SampleID,
+                              method = "WtSPAG",
+                              traitType = "time-to-event",
+                              control = list(RefPrevalence = RefPrevalence))
+  
+  PhenoData = PhenoData %>% 
+    mutate(R = obj.WtSPAG$mresid,
+           weight = obj.WtSPAG$weight) 
+  
+  ####calculate batch effect p-value for each genetic variant------------------------------------
+  w1 = PhenoData$weight/(2*sum(PhenoData$weight))
+  R_tilde = PhenoData$R - mean( PhenoData$R)
+  meanR = mean( PhenoData$R)
+  if(!is.null(GRM)){
+    var.ratio.w0 = (t(w1) %*% GRM %*% w1 + 1/(2*mergeGenoInfo$AN_ref))/(sum(w1^2) + 1/(2*mergeGenoInfo$AN_ref))
+    var.ratio.int = (t(R_tilde) %*% GRM %*% R_tilde)/sum(R_tilde^2)
+
+    
+  }else{var.ratio.w0 = var.ratio.int=1}
+  mergeGenoInfo = mergeGenoInfo %>%
+    mutate(var.ratio.w0 = var.ratio.w0,
+           var.ratio.int=var.ratio.int)
+  
+  pvalue_bat = lapply(1: nrow(mergeGenoInfo), function(ind){
+    p.test = Batcheffect.Test(n0 = mergeGenoInfo$n0[ind],
+                              n1 = mergeGenoInfo$n1[ind],
+                              n.ext = mergeGenoInfo$AN_ref[ind]/2,
+                              maf0 = mergeGenoInfo$mu0[ind],
+                              maf1 = mergeGenoInfo$mu1[ind] ,
+                              maf.ext = mergeGenoInfo$AF_ref[ind],
+                              pop.prev = RefPrevalence,
+                              var.ratio = mergeGenoInfo$var.ratio.w0[ind])
+  })%>%unlist()
+  
+  mergeGenoInfo = mergeGenoInfo %>% mutate(pvalue_bat)
+  
+  
+  
+  ####estimate unknown parameters according to batch effect p-values---------------------------------
+  mergeGenoInfo = mergeGenoInfo %>% mutate(mu.int = (mu0 + mu1)/2,
+                                           mu.int = ifelse(mu.int > 0.5, 1 - mu.int, mu.int),
+                                           index = 1:n())
+  
+  
+  
+  cat("estimate TPR and sigma2--------------\n")
+  maf.group = c(seq(0, 0.4, 0.05),max(mergeGenoInfo$mu.int))
+  mergeGenoInfo =lapply(1:(length(maf.group)-1), function(i){
+    cat(i,"\n")
+    
+    ##assume that genotypes with MAF in [ maf.group[i] , maf.group[i+1]] have the same mixture distribution
+    data = mergeGenoInfo %>% filter(mu.int > maf.group[i] & mu.int <= maf.group[i+1] )
+    
+    ##using batcheffect p-values with MAF in [maf.group[i]-0.1 , maf.group[i+1]+0.1] to estimate parameters
+    data.ref = mergeGenoInfo %>% 
+      filter(mu.int >= max(maf.group[i]-0.1,0) & mu.int < min(1,maf.group[i+1]+0.1) )
+    
+    mu = (maf.group[i]+maf.group[i+1])/2
+    
+    n.ext = mean(na.omit(data$AN_ref)[1])/2
+    var_mu_ext = mu*(1-mu)/(2*n.ext)
+    
+    var_Sbat = ifelse(is.null(GRM), sum(w1^2)*2*mu*(1-mu) + var_mu_ext,
+                      t(w1) %*% GRM %*% w1*2*mu*(1-mu) + var_mu_ext) 
+    
+    obj = fun.est.param(vec_p_bat=data.ref$pvalue_bat ,
+                        vec_var_Sbat=var_Sbat)
+    TPR = obj[1]
+    sigma2 = obj[2]
+    
+    w.ext = optim(par = 0.5, method = "L-BFGS-B", lower = 0, upper = 1
+                  , fn = fun.optimalWeight
+                  , pop.prev = RefPrevalence
+                  , y = PhenoData$Indicator
+                  , R = PhenoData$R
+                  , w = PhenoData$weight
+                  , mu = mu
+                  , N = nrow(PhenoData)
+                  , n.ext = n.ext
+                  , sigma2 = obj$sigma2
+                  , TPR = obj$TPR
+    )$par[1]
+    data=data%>%cbind(.,TPR, sigma2, w.ext)
+    
+  })%>%
+    do.call("rbind",.) %>%
+    as_tibble() %>%
+    arrange(index) %>% 
+    select(-index)
+  
+  data.table::fwrite(mergeGenoInfo, 
+                     OutputFile, 
+                     row.names = F, col.names = T, quote = F, sep = "\t")
+  
+  #### output-----------------------------------------------------------
+  return(list(mergeGenoInfo=mergeGenoInfo, 
+              PhenoData = PhenoData,
+              RefPrevalence = RefPrevalence, 
+              control = control))
+}
+
+
+
 ## function to test for batch effect
 Batcheffect.Test = function(n0,         # number of controls
                             n1,         # number of cases
@@ -172,187 +376,4 @@ fun.optimalWeight = function(par, pop.prev, R, y, mu1, w , mu, N, n.ext, sigma2,
   return(mu1)
   
 }
-
-
-QCforBatchEffect = function(GenoFile               # a character of file names of genotype files
-                            ,GenoFileIndex = NULL  # additional index file(s) corresponding to GenoFile
-                            ,OutputFile
-                            ,control=list(AlleleOrder = "ref-first")  
-                            ,PhenoData             # an R data frame with at least two columns, headers are required and should include c("SampleID", "Indicator"), the "Indicator" column should be 0, 1, or NA. 
-                            ,RefAfFile             # a character of file name of refInfo, which including at least 7 columns, header are required and should include c("CHROM", "POS", "ID", "REF", "ALT", "AF_ref","AN_ref")  
-                            ,RefPrevalence         # refernce population prevalence, the proportion of indicator == 1.
-                            ,SNPnum=1e4            # default least number of SNPs is 1e4
-                            ,GRM = 1               # genotype relatedness matrix
-                            
-){
-  if(is.null(OutputFile))
-    stop("Argument of 'OutputFile' is required to store information for the follow-up analysis.")
-  
-  # check if there are c("Indicator", "SampleID") in PhenoData-------------------
-  if(!is.null(control$IndicatorColumn))
-  {
-    if(!control$IndicatorColumn %in% colnames(PhenoData))
-      stop(paste0("Cannot find a column of '",
-                  control$IndicatorColumn,
-                  "' (i.e. control$IndicatorColumn) in colnames(PhenoData)"))
-    posCol = which(colnames(PhenoData) == control$IndicatorColumn)
-    colnames(PhenoData)[posCol] = "Indicator"
-  }
-  
-  if(!is.null(control$SampleIDColumn))
-  {
-    if(!control$SampleIDColumn %in% colnames(PhenoData))
-      stop(paste0("Cannot find a column of '",
-                  control$IndicatorColumn,
-                  "' (i.e. control$SampleIDColumn) in colnames(PhenoData)"))
-    posCol = which(colnames(PhenoData) == control$SampleIDColumn)
-    colnames(PhenoData)[posCol] = "SampleID"
-  }  
-  
-  if(!"Indicator" %in% colnames(PhenoData))
-    stop("The column of 'Indicator' is required in PhenoData!")
-  
-  if(any(!unique(PhenoData$Indicator) %in% c(0,1,NA)))
-    stop("The value of Indicator should be 0,1 or NA")
-  
-  if(!"SampleID" %in% colnames(PhenoData))
-    stop("The column of 'SampleID' is required in PhenoData!")
-  
-  #step1: quality control--------------------------------------------------------
-  suppressPackageStartupMessages(library("GRAB",quietly = T))
-  suppressPackageStartupMessages(library("data.table",quietly = T))
-  suppressPackageStartupMessages(library("dplyr",quietly = T))
-  suppressPackageStartupMessages(library("mvtnorm",quietly = T))
-  
-  ## reference genoInfo----------------------------------------------------------
-  refGenoInfo = fread(RefAfFile)%>%as_tibble()
-  
-  # check if there are 7 columns in RefAfFile
-  for(colname in c("CHROM", "POS", "ID", "REF", "ALT", "AF_ref","AN_ref")){
-    if(!colname %in% colnames(refGenoInfo)){
-      stop( paste0(colname, " is missing in RefAfFile!") )}
-  }
-
-  ## merge sample genoInfo and ref genoInfo--------------------------------------
-  GenoInfo.ctrl = GRAB.getGenoInfo(GenoFile = GenoFile
-                                   ,GenoFileIndex = GenoFileIndex
-                                   ,SampleIDs = with(PhenoData,SampleID[Indicator==0]) # MAF in cases
-                                   ,control = control) %>%
-    rename(mu0 = altFreq, mr0 = missingRate ) %>% 
-    select(mu0, mr0)
-  
-  if(nrow(GenoInfo.ctrl)<SNPnum)    
-    stop("The number of genetic variants < ",SNPnum)
-  
-  GenoInfo = GRAB.getGenoInfo(GenoFile = GenoFile
-                              ,GenoFileIndex = GenoFileIndex
-                              ,SampleIDs = with(PhenoData,SampleID[Indicator==1]) # MAF in controls
-                              ,control = control) %>% 
-    rename(mu1 = altFreq, mr1 = missingRate) %>% 
-    cbind(., GenoInfo.ctrl) %>% as_tibble() %>%
-    mutate(RA = ifelse(REF < ALT, paste0(REF, ALT), paste0(ALT, REF))) %>%
-    mutate(index = 1:n())
-  
-  mergeGenoInfo = refGenoInfo %>% 
-    mutate(RA = ifelse(REF < ALT, paste0(REF, ALT), paste0(ALT, REF))) %>% 
-    merge(., GenoInfo, by=c("CHROM", "POS", "RA"), all.y=T) %>% 
-    rename(REF = REF.y, ALT = ALT.y, ID = ID.y)%>% 
-    mutate(AF_ref = ifelse(REF == REF.x, AF_ref, 1-AF_ref  ))%>%
-    select(-REF.x, -ALT.x, -ID.x, -RA) %>%
-    arrange( index )%>%
-    select( -index )%>%
-    mutate( n1=sum(PhenoData$Indicator) * (1 - mr1),
-            n0=sum(1 - PhenoData$Indicator) * (1 - mr0) )
-  
-
-  ####calculate batch effect p-value for each genetic variant------------------------------------
-  pvalue_bat = lapply(1: nrow(mergeGenoInfo), function(ind){
-    p.test = Batcheffect.Test(n0 = mergeGenoInfo$n0[ind],
-                              n1 = mergeGenoInfo$n1[ind],
-                              n.ext = mergeGenoInfo$AN_ref[ind]/2,
-                              maf0 = mergeGenoInfo$mu0[ind],
-                              maf1 = mergeGenoInfo$mu1[ind] ,
-                              maf.ext = mergeGenoInfo$AF_ref[ind],
-                              pop.prev = RefPrevalence)
-  })%>%unlist()
-  
-  mergeGenoInfo = mergeGenoInfo %>% mutate(pvalue_bat)
-  
-  
-  ####fit null model-------------------------------------------------------------------
-  obj.WtSPAG = GRAB.NullModel(Surv(SurvTime, Indicator) ~ Cov1 + Cov2,
-                              data = PhenoData,
-                              subjData = SampleID,
-                              method = "WtSPAG",
-                              traitType = "time-to-event",
-                              control = list(RefPrevalence = RefPrevalence))
-  
-  PhenoData = PhenoData %>% 
-    mutate(R = obj.WtSPAG$mresid,
-           weight = obj.WtSPAG$weight) 
-  
-  ####estimate unknown parameters according to batch effect p-values---------------------------------
-  mergeGenoInfo = mergeGenoInfo %>% mutate(mu.int = (mu0 + mu1)/2,
-                                           mu.int = ifelse(mu.int > 0.5, 1 - mu.int, mu.int),
-                                           index = 1:n())
-  
-
-  
-  cat("estimate TPR and sigma2--------------\n")
-  maf.group = c(seq(0, 0.4, 0.05),max(mergeGenoInfo$mu.int))
-  mergeGenoInfo =lapply(1:(length(maf.group)-1), function(i){
-    cat(i,"\n")
-    
-    ##assume that genotypes with MAF in [ maf.group[i] , maf.group[i+1]] have the same mixture distribution
-    data = mergeGenoInfo %>% filter(mu.int > maf.group[i] & mu.int <= maf.group[i+1] )
-    
-    ##using batcheffect p-values with MAF in [maf.group[i]-0.1 , maf.group[i+1]+0.1] to estimate parameters
-    data.ref = mergeGenoInfo %>% 
-      filter(mu.int >= max(maf.group[i]-0.1,0) & mu.int < min(1,maf.group[i+1]+0.1) )
-    
-    mu = (maf.group[i]+maf.group[i+1])/2
-    w1 = PhenoData$weight/(2*sum(PhenoData$weight))
-    n.ext = mean(na.omit(data$AN_ref)[1])/2
-    var_mu_ext = mu*(1-mu)/(2*n.ext)
-    
-    var_Sbat = ifelse(GRM==1, sum(w1^2)*2*mu*(1-mu) + var_mu_ext,
-                      t(vec_weight) %*% GRM %*% vec_weight + var_mu_ext) 
-    
-    obj = fun.est.param(vec_p_bat=data.ref$pvalue_bat ,
-                    vec_var_Sbat=var_Sbat)
-    TPR = obj[1]
-    sigma2 = obj[2]
-      
-    w.ext = optim(par = 0.5, method = "L-BFGS-B", lower = 0, upper = 1
-              , fn = fun.optimalWeight
-              , pop.prev = RefPrevalence
-              , y = PhenoData$Indicator
-              , R = PhenoData$R
-              , w = PhenoData$weight
-              , mu = mu
-              , N = nrow(PhenoData)
-              , n.ext = n.ext
-              , sigma2 = obj$sigma2
-              , TPR = obj$TPR
-      )$par[1]
-    data=data%>%cbind(.,TPR, sigma2, w.ext)
-    
-  })%>%
-    do.call("rbind",.) %>%
-    as_tibble() %>%
-    arrange(index) %>% 
-    select(-index)
-  
-  data.table::fwrite(mergeGenoInfo, 
-                     OutputFile, 
-                     row.names = F, col.names = T, quote = F, sep = "\t")
-  
-  #### output-----------------------------------------------------------
-  return(list(mergeGenoInfo=mergeGenoInfo, 
-    PhenoData = PhenoData ,
-    control = control))
-}
-
-
-
 
